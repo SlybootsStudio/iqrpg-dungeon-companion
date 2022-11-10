@@ -1,0 +1,18 @@
+/* PAYLOAD FOR RUNNING
+{
+  "misc":{"actionBonus":{"current":3679}},
+  "data":{
+  "skillName":"Quarrying",
+  "currentRoom":1,
+  "roomNumber":"1",
+  "success":true,
+  "successRoll":106,
+  "successChance":"135",
+  "successDifficulty":700,
+  "text1":"A thin wall of stone blocks the exit. You use your hammer to try to break it down.",
+  "text2":"The stone wall crumbles and you are able to pass.",
+  "exp":2037,
+  "turns":1,
+  "maxTurns":100},
+  "skill":{"name":"quarrying","data":{"exp":2967166102}},"delay":6030,"autos":875}
+*/

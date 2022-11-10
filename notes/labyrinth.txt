@@ -1,0 +1,16 @@
+Labyrinth Room -- Payload
+{
+  "data":[
+    [5,1],
+    [7,1],
+    [5,2],
+    [5,3],
+    [2,1],
+    [4,1],
+    [6,1],
+    ...,
+  "currentRoom":0,
+  "turns":0,
+  "maxTurns":100,
+  "rewardObtained":false
+}

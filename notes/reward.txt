@@ -1,0 +1,2 @@
+//https://www.iqrpg.com/php/misc.php?mod=getLabyrinthRewards
+//[{"id":"wood","amount":39628},{"id":"wood","amount":356492},{"id":"metal","amount":134119},{"id":"wood","amount":28698},{"id":"wood","amount":151613},{"id":"wood","amount":31979},{"id":"alchemical_dust","amount":64},{"id":"gold","amount":400086},{"id":"wood","amount":326974},{"id":"artisan_shard","amount":381}]*/
