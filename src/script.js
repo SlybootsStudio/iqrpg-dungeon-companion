@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         IQRPG Labyrinth Companion
 // @namespace    https://www.iqrpg.com/
-// @version      0.1.3
+// @version      1.0.0
 // @author       Tempest
 // @description  QoL enhancement for IQRPG Labyrinth
 // @homepage     https://slyboots.studio/iqrpg-labyrinth-companion/
@@ -21,12 +21,17 @@ const SHOW_ROOM_CHANCE = 1;
 const SHOW_ROOM_ESTIMATE = 1;
 const SHOW_ROOM_TOTAL = 1;
 
+const MODIFY_NAVIGATION = 1; // 0 - Don't modify nav button, 1 - modify nav button (default)
+
 
 const NAVITEM_LABY = 7; // Which nav item to style
 const RENDER_DELAY = 200; // milliseconds after view loads to render companion
 const SKILL_BOX_INDEX = 3; // Will be 2, or 3, depending on Land status.
 
-const CACHE_LAB = "cache_lab";
+const MAX_ACTIONS = 100; // This may change in the future if the developer allows an increase.
+// If that happens, we'll want to read this from the payload data, and not hard code it.
+
+const CACHE_LAB = "cache_lab"; // Cache for all the
 const CACHE_LAB_NAV = "cache_lab_nav";
 
 //-----------------------------------------------------------------------
@@ -70,26 +75,31 @@ function renderLaby(data, skills) {
 
 function renderLabyFromCache(data, skills) {
 
-    let col3 = $('.labytable');
-// we only want to add one labytable
-    if( !col3.length ) {
+    let col = $('.labytable');
+
+    // Check to make sure a Laby table doesn't currently exist.
+    // If it does, we'll update it.
+    // If it doesn't, we'll create one.
+    if( !col.length ) {
       let wrapper = $('.main-game-section');
       $(wrapper).css('position', 'relative');
-      col3 = $('.main-section__body', wrapper).clone();
-      $(col3).css('position', 'absolute');
-      $(col3).css('top', '30px');
-      $(col3).css('right', '0');
-      $(col3).addClass('labytable');
-     $(wrapper).append(col3);
+      col = $('.main-section__body', wrapper).clone();
+      $(col).css('position', 'absolute');
+      $(col).css('top', '30px');
+      $(col).css('right', '0');
+      $(col).addClass('labytable');
+      $(wrapper).append(col);
     }
 
     data = JSON.parse(data);
     let cached = readCache(CACHE_LAB);
-    //console.log('New Data', data);
-    cached.currentRoom = data?.data?.currentRoom || 0;
-    renderLabyTable(cached, col3, skills);
 
-   writeNavCache(data.data.turns, data.data.maxTurns, false);
+    // Use the cached data for the Laby table, but update the `currentRoom` based
+    // on our most up to date information about player progress.
+    cached.currentRoom = data?.data?.currentRoom || 0;
+    renderLabyTable(cached, col, skills);
+
+    writeNavCache(data.data.turns, data.data.maxTurns, false);
 }
 
 /**
@@ -182,7 +192,13 @@ function getChanceBySkill(tier, skill) {
     return chance;
 }
 
-
+/**
+ * Render the labyrinth table.
+ *
+ * @param {Object} data
+ * @param {domElement} ele
+ * @param {Array} skills
+ */
 function renderLabyTable(data, ele, skills) {
 
     let remaining = data.maxTurns;
@@ -232,21 +248,36 @@ function renderLabyTable(data, ele, skills) {
     ele.html(html);
 }
 
+/**
+ * Update the Labyrinth button in the navigation to match the state of progress.
+ *
+ * @param {Object} data
+ * @param {domElement} ele
+ * @param {Array} skills
+ */
 function updateNavigation() {
+
+    // Players can disable modification entirely using this setting.
+    if(!MODIFY_NAVIGATION) {
+        return;
+    }
+
+    // This is the payload we should be pulling out from cache
     /*
      * data : {
      *   turns
      *   maxTurns
      *   rewardObtained
+     *   date
      * }
      */
     let data = readCache(CACHE_LAB_NAV);
 
 
     // We only want to use cached data from today.
+    // Set to New York Timezone, which matches server time.
     let date = new Date();
-    let _date = date.toLocaleString('en-GB').split(',')[0];
-
+    let _date = date.toLocaleString('en-GB', { timeZone: 'America/New_York' }).split(',')[0];
     if( _date != data?.date) {
         data = undefined;
     }
@@ -257,15 +288,23 @@ function updateNavigation() {
     if(!data) {
         // We lack information until the user clicks on Labyrinth
         $(link).css('color', 'white');
+        $(link).css('background-color', 'red');
+        $(link).html("Labyrinth [Need Info]");
     } else if (data.turns < data.maxTurns) {
         // User has turns remaining
         $(link).css('color', 'yellow');
+        $(link).css('background-color', 'red');
+        $(link).html("Labyrinth [Unfinished]");
     } else if(!data.rewardObtained) {
         // Labyrinth is complete, but reward unclaimed
         $(link).css('color', 'red');
+        $(link).css('background-color', 'white');
+        $(link).html("Labyrinth [CLAIM LOOT]");
     } else if(data.rewardObtained) {
         // Labyrinth is complete, Reward claimed
         $(link).css('color', 'green');
+        $(link).css('background-color', '');
+        $(link).html("Labyrinth [Complete]");
     }
 }
 
@@ -346,33 +385,53 @@ function sendReplacement(data) {
 
 function onReadyStateChangeReplacement() {
 
-   // console.log('Response URL', this.responseURL);
+    //
+    // This is called anytime there is an action complete, or a view (page) loads.
+    // console.log('Response URL', this.responseURL);
+    //
     setTimeout( () => {
-
-      // Loading the Labyrinth View
-      if(this.responseURL.includes("php/misc.php?mod=loadLabyrinth")) {
-          if(this.response && !loadOnce) {
+        //
+        // Player Loading the Labyrinth View
+        //
+        if(this.responseURL.includes("php/misc.php?mod=loadLabyrinth")) {
+            // LoadOnce is tracked because this function can be triggered
+            // multiple times in a single call.
+            if(this.response && !loadOnce) {
               loadOnce = true;
               $('.labytable').remove(); // Remove old table
               let skills = parseSkills(); // Scans skill table
-              renderLaby(this.response, skills);
-          }
+              renderLaby(this.response, skills); // Render a new table.
+            }
+        }
+        //
+        // Player is running the Labyrinth
+        //  - We're still on the labyrinth page, but the actions are being executed.
+        //
+        else if(this.responseURL.includes("php/actions/labyrinth.php")) {
+            let skills = parseSkills();
+            renderLabyFromCache(this.response, skills);
+        }
+        //
+        // Player has claimed the Labyrinth reward
+        //
+        else if(this.responseURL.includes("misc.php?mod=getLabyrinthRewards")) {
+            writeNavCache(MAX_ACTIONS, MAX_ACTIONS, true);
+        }
+        //
+        // We're on another page, elsewhere in IQ
+        //
+        else {
+            // Remove The Labyrinth table.
+            $('.labytable').remove();
+            loadOnce = false;
+        }
 
-      // Running the Labyrinth
-      } else if(this.responseURL.includes("php/actions/labyrinth.php")) {
-          let skills = parseSkills();
-          renderLabyFromCache(this.response, skills);
-      } else if(this.responseURL.includes("misc.php?mod=getLabyrinthRewards")) {
-          writeNavCache(100, 100, true);
-      } else {
-          // Remove labytable.
-          $('.labytable').remove();
-          loadOnce = false;
-      }
+        //
+        // Update the navigation to make sure we're showing the latest information.
+        //
+        updateNavigation();
+
     }, RENDER_DELAY );
-
-    // Change navigation
-    updateNavigation();
 
     /* Avoid errors in console */
     if(this._onreadystatechange) {
@@ -385,5 +444,21 @@ function onReadyStateChangeReplacement() {
 window.XMLHttpRequest.prototype.send = sendReplacement;
 
 
+/**
+ * Recursive function to make sure our navigation modifications
+ * are up to date.
+ */
+function checkNavigation() {
+    updateNavigation();
 
+    // Check once a minute to see if new labyrinth is available.
+    setTimeout( () => { checkNavigation(); }, 1000 * 60 );
+}
 
+//
+// When page is ready, let's check to make
+//  sure our navigation is accurate.
+//
+$(document).ready( () => {
+    checkNavigation();
+});
