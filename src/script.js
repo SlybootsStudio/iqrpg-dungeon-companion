@@ -1,47 +1,74 @@
 // ==UserScript==
-// @name         IQRPG Labyrinth Companion
+// @name         IQRPG Dungeon Companion
 // @namespace    https://www.iqrpg.com/
-// @version      1.0.0
+// @version      0.1.1
 // @author       Tempest
-// @description  QoL enhancement for IQRPG Labyrinth
-// @homepage     https://slyboots.studio/iqrpg-labyrinth-companion/
-// @source       https://github.com/SlybootsStudio/iqrpg-labyrinth-companion
+// @description  QoL enhancement for IQRPG Dungeons
+// @homepage     https://slyboots.studio/iqrpg-dungeon-companion/
+// @source       https://github.com/SlybootsStudio/iqrpg-dungeon-companion
 // @match        https://*.iqrpg.com/*
 // @require      http://code.jquery.com/jquery-latest.js
 // @license      unlicense
 // @grant        none
+// @downloadURL https://update.greasyfork.org/scripts/498244/IQRPG%20Dungeon%20Companion.user.js
+// @updateURL https://update.greasyfork.org/scripts/498244/IQRPG%20Dungeon%20Companion.meta.js
 // ==/UserScript==
 
 /* global $ */
 
-
-const SHOW_ROOM_NUMBER = 1;
-const SHOW_ROOM_TIER = 1;
-const SHOW_ROOM_CHANCE = 1;
-const SHOW_ROOM_ESTIMATE = 1;
-const SHOW_ROOM_TOTAL = 1;
-
-const MODIFY_NAVIGATION = 1; // 0 - Don't modify nav button, 1 - modify nav button (default)
-
-
-const NAVITEM_LABY = 7; // Which nav item to style
-const RENDER_DELAY = 200; // milliseconds after view loads to render companion
-const SKILL_BOX_INDEX = 3; // Will be 2, or 3, depending on Land status.
-
-const MAX_ACTIONS = 100; // This may change in the future if the developer allows an increase.
-// If that happens, we'll want to read this from the payload data, and not hard code it.
-
-const CACHE_LAB = "cache_lab"; // Cache for all the
-const CACHE_LAB_NAV = "cache_lab_nav";
+/*
+ * Special thanks to Ciomegu for formula feedback
+ */
 
 //-----------------------------------------------------------------------
+// Config
 //-----------------------------------------------------------------------
-//
+
+
+
+
+/*              Tokens, Index, Name */
+const TOKENS = [20, // 0 - Goblin
+                25, // 1 - Mountain
+                30, // 2 - Tomb
+                35, // 3 - Lair
+                40, // 4 - Ruins
+                40, // 5 - Tower
+                50, // 6 - Cells
+                60, // 7 - Hall
+               100, // 8 - Vault
+               150];// 9 - Treasury
+
+/**
+ * Identify which key is used for the estimates on the Token Store
+ * To change, use the Index (0-9) from the list above.
+ */
+const INDEX_FOR_ESTIMATE = 0; // Default, 1 - Goblin Key
+
+/**
+ * Modify the token store page to show additional keys estimates.
+ */
+const MODIFY_TOKEN_STORE = 1; // 1 - Yes, 0 - No
+
+/**
+ * Used to store the Dungeon Keeper stats when you navigate from
+ * the Personnel page, to the Dungeons and Token Store page.
+ */
+const CACHE_DUNGEON = "cache_dungeon"; // Cache for all the
+
+
+const RENDER_DELAY = 100; // Delay for modifying the page.
+
+
+const RARITY_BONUS = 5; // Bonus (percent) per Rarity Level.
+const MAX_BONUS = 1.65; // 65% is the maximum for bonus tokens.
+
+//-----------------------------------------------------------------------
 // CACHE
-// We are caching the daily labyrinth,
-// which is updated each time to labyrinth page is visited.
-// The cached data is used when the labyrinth is being run.
-//
+//-----------------------------------------------------------------------
+/* We are caching the Dungeon Keeper stats,
+ * which are updated each time the personnel page is visited.
+ */
 function writeCache( key, data ) {
   localStorage[key] = JSON.stringify(data);
 }
@@ -50,327 +77,261 @@ function readCache( key ) {
   return JSON.parse(localStorage[key] || null) || localStorage[key];
 }
 
+
 //-----------------------------------------------------------------------
+// Util
 //-----------------------------------------------------------------------
 
-function renderLaby(data, skills) {
+/**
+ * Bonus percent by level
+ */
+function bonusByLevel(level) {
+    if(level < 50) return 0;
+    if(level < 75) return 2;
+    if(level < 100) return 5;
+    if(level < 125) return 10;
+    if(level < 150) return 20;
 
-    // Create 3rd column
-    let wrapper = $('.two-columns');
-    let col3 = $('.two-columns__column', wrapper).eq(1).clone();
-    $(wrapper).append(col3);
-
-    // Cache data
-    data = JSON.parse(data);
-    writeCache(CACHE_LAB, data);
-
-    // On the Laby page, 'currentRoom' refers to the completed rooms.
-    // On Laby Run, currentRoom is the target room you're TRYING to pass.
-    data.currentRoom += 1;
-
-    // Render table
-    renderLabyTable(data, col3, skills);
-    writeNavCache(data.turns, data.maxTurns, data.rewardObtained);
-}
-
-function renderLabyFromCache(data, skills) {
-
-    let col = $('.labytable');
-
-    // Check to make sure a Laby table doesn't currently exist.
-    // If it does, we'll update it.
-    // If it doesn't, we'll create one.
-    if( !col.length ) {
-      let wrapper = $('.main-game-section');
-      $(wrapper).css('position', 'relative');
-      col = $('.main-section__body', wrapper).clone();
-      $(col).css('position', 'absolute');
-      $(col).css('top', '30px');
-      $(col).css('right', '0');
-      $(col).addClass('labytable');
-      $(wrapper).append(col);
-    }
-
-    data = JSON.parse(data);
-    let cached = readCache(CACHE_LAB);
-
-    // Use the cached data for the Laby table, but update the `currentRoom` based
-    // on our most up to date information about player progress.
-    cached.currentRoom = data?.data?.currentRoom || 0;
-    renderLabyTable(cached, col, skills);
-
-    writeNavCache(data.data.turns, data.data.maxTurns, false);
+    return 40;
 }
 
 /**
- * Lookup a skill name by ID.
- *
- * Labyrinth rooms use an ID to reference which
- * skill is used.
- *
- * @param {Number} id
- *
- * @return {String}
+ * Bonus percent by rarity
  */
-function getSkillNameById(id) {
+function bonusTokens(rarity, level) {
+    let percent = 0;
+    rarity -= 1; // Rarity 1 (Common) doesn't apply any bonus, so we subtract it.
+    percent += rarity * RARITY_BONUS; // Each rarity level after common.
+    percent += bonusByLevel(level);
 
-    let name = "";
-
-    switch(id) {
-        case 1: name = "Battling"; break;
-        case 2: name = "Dungeon"; break;
-        case 3: name = "Mining"; break;
-        case 4: name = "Wood"; break;
-        case 5: name = "Quarry"; break;
-        case 6: name = "Rune"; break;
-        case 7: name = "Jewelry"; break;
-        case 8: name = "Alchemy"; break;
-    }
-
-    return name;
+    return percent;
 }
 
 /**
- * Lookup a skill name by ID.
- *
- * Labyrinth rooms use an ID to reference which
- * skill is used.
- *
- * @param {Number} roomId
- * @param {Number} currentRoomId
- *
- * @return {String} style
+ * The multiplier used in the total token calculation
  */
-function getStyleByRoomState(roomId, currentRoomId) {
+function bonusMultiplier() {
 
-    let style = "";
+    const dkStats = readCache(CACHE_DUNGEON);
 
-    if(currentRoomId == roomId ) {
-        // Active  Rooms are Yellow Background
-        // with Black Text
-        style = "background-color: #cc0; color: #000;";
+    const rarity = dkStats?.rarity || 0;
+    const level = dkStats?.level || 0;
+    const bonusPercent = bonusTokens(rarity, level);
+    
+    if(bonusPercent < 0) {
+        bonusPercent = 0;
     }
-
-    // Incomplete Rooms are Red Background
-    else if(currentRoomId < roomId ) {
-        style = "background-color: #600;";
-    }
-
-    // Completed Rooms are Green Background
-    else if(currentRoomId > roomId ) {
-     style = "background-color: #006400;";
-    }
-
-    return style;
+    const bonusMultiplier = (1 + bonusPercent / 100);
+    
+    return bonusMultiplier;
 }
+
 
 /**
- * Get the percent chance you have to progress
- * through a room, based on the tier of the room
- * and skill level.
- *
- * @param {Number} tier
- * @param {Number} skill
- *
- * @return {Float} chance
+ * Used to debounce DOM modifications
  */
-function getChanceBySkill(tier, skill) {
+let loadDungeonsOnce = false;
+let loadPersonnelOnce = false;
+let loadTokenStoreOnce = false;
 
-    let base = 1;
-
-    switch(tier) {
-        case 1: base = 700; break;
-        case 2: base = 1000; break;
-        case 3: base = 1400; break;
-        case 4: base = 1900; break;
-        case 5: base = 2500; break;
-    }
-
-    let chance = 1000 / base * skill;
-    chance = parseFloat(chance / 10).toFixed(2);
-
-    return chance;
-}
-
-/**
- * Render the labyrinth table.
- *
- * @param {Object} data
- * @param {domElement} ele
- * @param {Array} skills
- */
-function renderLabyTable(data, ele, skills) {
-
-    let remaining = data.maxTurns;
-
-    const trStyle = 'border:1px solid black;';
-    const tdStyle = 'padding:3px;border-top:1px solid black;';
-
-    const showNumber = SHOW_ROOM_NUMBER === 1 ? "" : "display:none;";
-    const showTier = SHOW_ROOM_TIER === 1 ? "" : "display:none;";
-    const showChance = SHOW_ROOM_CHANCE === 1 ? "" : "display:none;";
-    const showEstimate = SHOW_ROOM_ESTIMATE === 1 ? "" : "display:none;";
-    const showTotal = SHOW_ROOM_TOTAL === 1 ? "" : "display:none;";
-
-    let html = '';
-    html += '<div style="width:100%;">'
-    html += '<table style="border-spacing:0;float:right;">';
-    html += `<tr style='${trStyle}'>`;
-    html += `<td style='${tdStyle}'>Room</td>`;
-    html += `<td style='${tdStyle}${showTotal}'>(T)Skill</td>`;
-    html += `<td style='${tdStyle}${showChance}'>Chance</td>`;
-    html += `<td style='${tdStyle}${showEstimate}'>Est</td>`;
-    html += `<td style='${tdStyle}${showTotal}'>Total</td>`;
-
-    data.data.map( (room, i) => {
-
-        let skill = room[0];
-        let tier = room[1];
-        const style = getStyleByRoomState(i+1, data.currentRoom);
-        const skillName = getSkillNameById(skill);
-        const chance = getChanceBySkill(tier, skills[skill-1]);
-        const estimated = Math.round(100/chance);
-        remaining -= estimated;
-
-
-        html += `<tr style='${style};${trStyle}'>`;
-        html += `<td style='${tdStyle}'>${i+1}</td>`;
-        html += `<td style='${tdStyle}${showTotal}'>(${tier})${skillName}</td>`;
-        html += `<td style='${tdStyle}${showChance}'>${chance}%</td>`;
-        html += `<td style='${tdStyle}${showEstimate}'>${estimated}</td>`;
-        html += `<td style='${tdStyle}${showTotal}'>${100 - remaining}</td>`;
-
-        html += `</tr>`;
-    });
-
-    html += "</table></div>";
-
-    ele.html(html);
-}
-
-/**
- * Update the Labyrinth button in the navigation to match the state of progress.
- *
- * @param {Object} data
- * @param {domElement} ele
- * @param {Array} skills
- */
-function updateNavigation() {
-
-    // Players can disable modification entirely using this setting.
-    if(!MODIFY_NAVIGATION) {
-        return;
-    }
-
-    // This is the payload we should be pulling out from cache
-    /*
-     * data : {
-     *   turns
-     *   maxTurns
-     *   rewardObtained
-     *   date
-     * }
-     */
-    let data = readCache(CACHE_LAB_NAV);
-
-
-    // We only want to use cached data from today.
-    // Set to New York Timezone, which matches server time.
-    let date = new Date();
-    let _date = date.toLocaleString('en-GB', { timeZone: 'America/New_York' }).split(',')[0];
-    if( _date != data?.date) {
-        data = undefined;
-    }
-
-    let link = $('.nav a').eq(NAVITEM_LABY);
-    $(link).css('font-weight', 'bold');
-
-    if(!data) {
-        // We lack information until the user clicks on Labyrinth
-        $(link).css('color', 'white');
-        $(link).css('background-color', 'red');
-        $(link).html("Labyrinth [Need Info]");
-    } else if (data.turns < data.maxTurns) {
-        // User has turns remaining
-        $(link).css('color', 'yellow');
-        $(link).css('background-color', 'red');
-        $(link).html("Labyrinth [Unfinished]");
-    } else if(!data.rewardObtained) {
-        // Labyrinth is complete, but reward unclaimed
-        $(link).css('color', 'red');
-        $(link).css('background-color', 'white');
-        $(link).html("Labyrinth [CLAIM LOOT]");
-    } else if(data.rewardObtained) {
-        // Labyrinth is complete, Reward claimed
-        $(link).css('color', 'green');
-        $(link).css('background-color', '');
-        $(link).html("Labyrinth [Complete]");
-    }
-}
-
-function writeNavCache(turns, maxTurns, rewardObtained) {
-
-    let date = new Date();
-    const _date = date.toLocaleString('en-GB').split(',')[0]; // Server is GB
-
-    const payload ={
-        turns : turns ?? 0,
-        maxTurns : maxTurns ?? 100,
-        rewardObtained : rewardObtained ?? false,
-        date : _date
-    }
-
-    //console.log("Cache", payload);
-
-    writeCache(CACHE_LAB_NAV, payload);
-}
-
-/**
- * Parse the Skill box into an array of your skill levels
- *
- * This works whether or not the box is collapsed.
- *
- * @return {Array} skills
- */
-function parseSkills() {
-
-    // New players won't have the 'Land' main-section box,
-    // which appears above 'Skills'. We need to check the text
-    // To make sure we're in the right box.
-
-    // For new players, this is skills.
-    // For land players, this is land.
-    let text = $('.main-section').eq(SKILL_BOX_INDEX - 1).text();
-
-    if(!text.includes('Skills')) {
-        // For new players, this is center content.
-        // For land players, this is skills.
-        text = $('.main-section').eq(SKILL_BOX_INDEX).text();
-    }
-
+function onReadyStateChangeReplacement() {
     //
-    // The html has been converted into a text string.
-    // Now we parse the string into an array.
-    text = text.replace('Skills', '');
-    text = text.replaceAll('(', '');
+    // This is called anytime there is an action complete, or a view (page) loads.
+    // console.log('Response URL', this.responseURL);
+    //
 
-    let skills = text.split(')');
 
-    skills = skills.map( skill => {
-        // "skillname (level)"
-        skill = skill.trim();
-        skill = skill.split(' ');
-        return skill[1];
-    });
+    /**
+     * Remove the message at the top of the Dungeon page, only if we've left the Dungeon page.
+     */
+    let accordians = $('.main-game-section .main-section__body .accordian');
+    if(accordians.length !== TOKENS.length) { // Each dungeon has a accordion.
+      $('.removeMe').remove();
+    }
 
-    return skills;
+    setTimeout( () => {
+
+        /**
+         * Token Store page.
+         *
+         * Modify the table to show how many remaining keys need to be used, with various
+         * amounts of bonus tokens applied.
+         */
+        if(this.responseURL.includes("php/store.php?mod=tokenStore")) {
+
+            /**
+             * User has disabled this modification in the config above.
+             * Don't modify the page.
+             */
+            if(!MODIFY_TOKEN_STORE)
+                return;
+
+
+            if(this.response && !loadTokenStoreOnce) {
+
+                loadTokenStoreOnce = true;
+
+
+                /**
+                 * Get current Dungeoneering Tokens
+                 * [0] is the Boss Tokens, [1] is the Jewel Slots
+                 */
+                let header = $('.main-game-section .main-section__body .heading')[1]; // Jewel Slots header
+                let currentTokens = $(header).next().text(); // Get siblining element below the header
+                    currentTokens = currentTokens.replace('[Dungeoneering Tokens]: ', ''); // Remove text
+                    currentTokens = currentTokens.replaceAll(',', ''); // Remove commas
+                    currentTokens = parseInt(currentTokens); // Convert to int
+
+
+                /**
+                 * Modify the Jewel Slots table.
+                 * [0] is the Boss Tokens, [1] is the Jewel Slots
+                 */
+                let table = $('.main-game-section .main-section__body table')[1];
+                const trs = $('tr', table);
+
+                let bonus = Math.round((bonusMultiplier() - 1) * 100);
+
+                /**
+                 * Extend table headers
+                 */
+                $(trs[0]).append(`<td class='text-rarity-1'>No Bonus</td>`);
+                $(trs[0]).append(`<td class='text-rarity-1'>Current Bonus (${bonus}%)</td>`);
+                $(trs[0]).append(`<td class='text-rarity-1'>Max Bonus (65%)</td>`);
+
+                /**
+                 * Extend the rows
+                 */
+                for(let i = 1; i < trs.length; i += 1) { // Skipping header
+                    let td = $('td', trs[i]);
+                    let tokens = $(td[2]).text(); // Type [0], Current/Max [1], Tokens [2]
+                    tokens = tokens.replaceAll(',', ''); // Remove commas
+                    tokens = parseInt(tokens); // Convert to int
+
+                    tokens -= currentTokens; // Account for acrued tokens
+
+                    if(tokens < 0) tokens = 0; // Avoid this delightful error.
+
+                    const keys = Math.ceil(tokens / TOKENS[INDEX_FOR_ESTIMATE]);
+                    const keysBonus = Math.ceil(tokens / Math.round(TOKENS[INDEX_FOR_ESTIMATE] * bonusMultiplier())); //1.x
+                    const keysMax = Math.ceil(tokens / Math.round(TOKENS[INDEX_FOR_ESTIMATE] * MAX_BONUS)); // 1.65
+                    $(trs[i]).append(`<td>${keys.toLocaleString()}</td>`);
+                    $(trs[i]).append(`<td>${keysBonus.toLocaleString()}</td>`);
+                    $(trs[i]).append(`<td>${keysMax.toLocaleString()}</td>`);
+                    // toLocaleString() adds commas, or periods depending on locale.
+                }
+
+                /**
+                 * Add a note to the page, explaining the extra columns.
+                 */
+                $(table).after("<br/><p>The `No`, `Current`, and `Max` numbers represent the keys to run to buy the slot.</p>");
+
+            }
+        } else {
+            loadTokenStoreOnce = false;
+        }
+
+        /**
+         * Personnel page.
+         *
+         * Read and cache the dungeon keeper information.
+         */
+        if(this.responseURL.includes("php/land.php?mod=loadPersonnel")) {
+            if(this.response && !loadPersonnelOnce) {
+
+                loadPersonnelOnce = true;
+
+                const dkStats = JSON.parse(this.response).personnel.dungeon_keeper;
+                const payload = {
+                    level: dkStats.level, rarity : dkStats.rarity
+                };
+
+                writeCache(CACHE_DUNGEON, payload);
+            }
+        } else {
+            loadPersonnelOnce = false;
+        }
+
+        /**
+         * Dungeons page.
+         *
+         * Display the total tokens you could earn from each type of key, and total.
+         */
+        if(this.responseURL.includes("php/areas.php?mod=loadDungeons")) {
+
+            if(this.response && !loadDungeonsOnce) {
+
+                $('.removeMe').remove(); // Remove a previous one
+
+                loadDungeonsOnce = true;
+
+                const dungeonsCount = $('.accordian__item').length;
+
+                let grandTotal = 0;
+
+                for(let i = 0; i < dungeonsCount; i +=1) {
+                    /**
+                     * Find the amount of keys for each dungeon
+                     */
+                    let acc = $('.accordian__item')[i]; // Accordion
+                    let rightContent = $('div', acc)[1]; // [0] - Dungeon Name, [1] - Amount and Key
+                    let amount = $(rightContent).text().split('x ')[0]; // Amountx [Key Name] -- Get Amount
+                    const total = amount * Math.round(TOKENS[i] * bonusMultiplier()); // total tokens
+
+                    /**
+                     * Modify existing DOM element with total tokens available.
+                     */
+                    $(rightContent).prepend(`<span class='text-rarity-1'>${total.toLocaleString()} tokens</span> - `);
+
+                    grandTotal += total; // add total to running grand total
+                }
+
+                let header = `<span class='removeMe'>`;
+                 /**
+                  * Usually we're modifying an element which is re-rendered.
+                  * In this case, we're not. So we need to remove it ourselves.
+                  */
+
+                /**
+                 * Read from cache, set defaults in case Personnel page has not been visited.
+                 */
+                const dkStats = readCache(CACHE_DUNGEON);
+                const rarity = dkStats?.rarity || 0;
+                const level = dkStats?.level || 0; // Untrained, it would be level 1.
+                const bonusPercent = bonusTokens(rarity, level);
+
+
+                if(!level) {
+                    /**
+                     * User has not visited the Personnel page yet.
+                     */
+                    header += `<p>Userscript not synced with your <span class='green-text'>Dungeon Keeper</span>. `;
+                    header += `Visit your Personnel to update the token calculation.</p><br/>`;
+                } else {
+                    /**
+                     * Display the cached Dungeon Keeper stats.
+                     */
+                    header += `<p>Your <span class='text-rarity-${rarity}'>Dungeon Keeper</span> (Level <span class='green-text'>${level}</span>)</span> - ${bonusPercent}% Bonus</p></br>`;
+                }
+
+                /**
+                 * Display the grand total amount of tokens.
+                 */
+                header += `<p><b><span class='text-rarity-1'>${grandTotal.toLocaleString()} tokens</b></span> total.</p><br/></span>`;
+
+                $('.main-game-section .main-section__body').prepend(header);
+
+            }
+        } else {
+            loadDungeonsOnce = false;
+        }
+
+    }, RENDER_DELAY );
 }
 
-let loadOnce = false;
-
 //-----------------------------------------------------------------------
+// HTTP Request Override -- DO NOT EDIT
 //-----------------------------------------------------------------------
-
 let send = window.XMLHttpRequest.prototype.send;
 
 function sendReplacement(data) {
@@ -382,83 +343,4 @@ function sendReplacement(data) {
     return send.apply(this, arguments);
 }
 
-
-function onReadyStateChangeReplacement() {
-
-    //
-    // This is called anytime there is an action complete, or a view (page) loads.
-    // console.log('Response URL', this.responseURL);
-    //
-    setTimeout( () => {
-        //
-        // Player Loading the Labyrinth View
-        //
-        if(this.responseURL.includes("php/misc.php?mod=loadLabyrinth")) {
-            // LoadOnce is tracked because this function can be triggered
-            // multiple times in a single call.
-            if(this.response && !loadOnce) {
-              loadOnce = true;
-              $('.labytable').remove(); // Remove old table
-              let skills = parseSkills(); // Scans skill table
-              renderLaby(this.response, skills); // Render a new table.
-            }
-        }
-        //
-        // Player is running the Labyrinth
-        //  - We're still on the labyrinth page, but the actions are being executed.
-        //
-        else if(this.responseURL.includes("php/actions/labyrinth.php")) {
-            let skills = parseSkills();
-            renderLabyFromCache(this.response, skills);
-        }
-        //
-        // Player has claimed the Labyrinth reward
-        //
-        else if(this.responseURL.includes("misc.php?mod=getLabyrinthRewards")) {
-            writeNavCache(MAX_ACTIONS, MAX_ACTIONS, true);
-        }
-        //
-        // We're on another page, elsewhere in IQ
-        //
-        else {
-            // Remove The Labyrinth table.
-            $('.labytable').remove();
-            loadOnce = false;
-        }
-
-        //
-        // Update the navigation to make sure we're showing the latest information.
-        //
-        updateNavigation();
-
-    }, RENDER_DELAY );
-
-    /* Avoid errors in console */
-    if(this._onreadystatechange) {
-        return this._onreadystatechange.apply(this, arguments);
-    } else {
-        return this._onreadystatechange;
-    }
-}
-
 window.XMLHttpRequest.prototype.send = sendReplacement;
-
-
-/**
- * Recursive function to make sure our navigation modifications
- * are up to date.
- */
-function checkNavigation() {
-    updateNavigation();
-
-    // Check once a minute to see if new labyrinth is available.
-    setTimeout( () => { checkNavigation(); }, 1000 * 60 );
-}
-
-//
-// When page is ready, let's check to make
-//  sure our navigation is accurate.
-//
-$(document).ready( () => {
-    checkNavigation();
-});
